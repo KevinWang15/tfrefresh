@@ -208,6 +208,50 @@ class TestVerifyRead(Base):
         self.assertEqual(self.read_card_file("v.bin"), data)
 
 
+class TestEmuMMCFragmentCheck(Base):
+    def test_parse_filefrag_extents(self):
+        self.assertEqual(tf.parse_filefrag_extents(
+            "a.bin: 1 extent found"), 1)
+        self.assertEqual(tf.parse_filefrag_extents(
+            "a.bin: 599 extents found"), 599)
+        self.assertIsNone(tf.parse_filefrag_extents("garbage"))
+
+    def test_no_emummc_dir_is_quiet(self):
+        msgs = []
+        self.assertEqual(
+            tf.check_emummc_fragmentation(self.card, log=msgs.append), [])
+        self.assertEqual(msgs, [])
+
+    def test_contiguous_parts_pass(self):
+        self.write_card_file("emuMMC/SD00/eMMC/00", b"x" * 100)
+        msgs = []
+        with mock.patch.object(tf, "file_extents", lambda p: 1):
+            over = tf.check_emummc_fragmentation(self.card,
+                                                 log=msgs.append)
+        self.assertEqual(over, [])
+        self.assertTrue(any("within the" in m for m in msgs))
+
+    def test_over_limit_warns_and_lists(self):
+        self.write_card_file("emuMMC/SD00/eMMC/12", b"x" * 100)
+        msgs = []
+        with mock.patch.object(tf, "file_extents", lambda p: 599):
+            over = tf.check_emummc_fragmentation(self.card,
+                                                 log=msgs.append)
+        self.assertEqual(over, [("emuMMC/SD00/eMMC/12", 599)])
+        self.assertTrue(any("WARNING" in m for m in msgs))
+
+    def test_run_emits_warning(self):
+        self.write_card_file("emuMMC/SD00/eMMC/12", b"x" * 100)
+        import contextlib, io
+        buf = io.StringIO()
+        with mock.patch.object(tf, "file_extents", lambda p: 599):
+            with contextlib.redirect_stdout(buf):
+                rc = tf.main(["run", self.card, "--state-dir", self.state,
+                              "--buffer", "16M", "--force"])
+        self.assertEqual(rc, 0)  # warning only, never fails the run
+        self.assertIn("599 fragments", buf.getvalue())
+
+
 class TestCrashRecovery(Base):
     def _stage_and_crash(self):
         """Drive a file to CLEARED state, then stop before write-back."""

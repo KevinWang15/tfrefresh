@@ -90,6 +90,13 @@ percentage of the free space on the state disk (default `80%`). Files
 larger than the buffer are skipped with a warning — re-run with a bigger
 buffer to include them.
 
+After each `run`, if the card hosts a file-based Nintendo Switch emuMMC
+(`emuMMC/*/eMMC/`), tfrefresh checks every part file's fragment count
+against the 511-fragment limit above which Atmosphere's emuMMC fatally
+aborts the boot, and prints a fix recipe for offenders. See
+[docs/case-emummc-fragment-limit.md](docs/case-emummc-fragment-limit.md)
+for the full case study. Requires `filefrag` (Linux); skipped elsewhere.
+
 State (journal + staged buffer copies) lives in
 `~/.tfrefresh/<volume-uuid>/`, keyed per card, so refreshing a second card
 needs no cleanup. On macOS the key is the real filesystem UUID from
@@ -130,11 +137,9 @@ starts (wasteful, never unsafe).
   walking the filesystem: Atmosphere's file-based emuMMC builds a cluster
   link map with room for 511 fragments per `emuMMC/*/eMMC/*` part file
   and *fatally aborts the boot* (instant black screen / reboot to RCM)
-  when a part file exceeds that. If you refresh a card holding a
-  file-based emuMMC, check the part files afterwards
-  (`filefrag emuMMC/SD00/eMMC/*`) and defragment any file back to one
-  extent (copy it within the card, hash-verify, replace) before booting
-  the Switch.
+  when a part file exceeds that. tfrefresh checks for this automatically
+  after every run; the full story and the defragmentation recipe are in
+  [docs/case-emummc-fragment-limit.md](docs/case-emummc-fragment-limit.md).
 - On journaling-less filesystems (exFAT, FAT32), a power cut or device
   removal mid-write can corrupt filesystem metadata even though file
   contents are protected. Keep the card powered and seated during the run,

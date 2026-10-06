@@ -40,6 +40,12 @@ Files that hit an I/O error are marked "error" (their card originals are
 left untouched) and the run continues; after fixing the hardware, re-run
 with --retry-errors to retry exactly those files.
 
+After a run, if the card holds a file-based Nintendo Switch emuMMC
+(emuMMC/*/eMMC/), each part file's fragment count is checked (via
+filefrag, Linux only) against the 511-fragment limit above which
+Atmosphere's emuMMC fatally aborts the boot; offenders are listed with a
+defragmentation recipe (docs/case-emummc-fragment-limit.md).
+
 State (journal + staged buffer copies) lives in
 ~/.tfrefresh/<volume-uuid>/, keyed per card, so refreshing a second card
 needs no cleanup: it gets its own state directory automatically and the
@@ -67,6 +73,14 @@ JOURNAL_NAME = "journal.jsonl"
 TMP_SUFFIX = ".tfresh-tmp"
 COPY_BUFSIZE = 4 * 1024 * 1024
 VERIFY_READ_ATTEMPTS = 3
+
+# Atmosphere's file-based emuMMC pre-builds a fixed-size cluster link map
+# per eMMC part file at boot (EMUMMC_FP_CLMT_COUNT = 1024 table entries,
+# 2 entries per fragment -> 511 fragments max) and fatally aborts the boot
+# (instant black screen / reboot to RCM) when a part file exceeds it.
+# See docs/case-emummc-fragment-limit.md.
+EMUMMC_MAX_FRAGMENTS = 511
+EMUMMC_WARN_FRAGMENTS = 384  # 75% of the hard limit
 
 # Journal states
 PENDING = "pending"        # known, not yet staged
@@ -187,6 +201,73 @@ def best_effort_meta(src, dst):
             os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
         except OSError:
             pass
+
+
+# ------------------------------------------------------- emuMMC fragments
+
+def parse_filefrag_extents(out):
+    """Parse 'N extent(s) found' from filefrag output; None if absent."""
+    for seg in out.split(":", 1)[-1].split():
+        if seg.isdigit():
+            return int(seg)
+    return None
+
+
+def file_extents(path):
+    """On-disk fragment count via filefrag; None when unavailable."""
+    try:
+        out = subprocess.run(["filefrag", path], capture_output=True,
+                             timeout=30, text=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return parse_filefrag_extents(out.stdout)
+
+
+def check_emummc_fragmentation(mount, log=print):
+    """Warn about emuMMC eMMC part files fragmented past the boot limit.
+
+    Returns [(relpath, extents)] over the hard limit. Best effort: if
+    filefrag is unavailable (e.g. macOS), the check is skipped silently.
+    """
+    base = os.path.join(mount, "emuMMC")
+    if not os.path.isdir(base):
+        return []
+    over, checked, unavailable = [], 0, 0
+    for entry in sorted(os.listdir(base)):
+        emmc_dir = os.path.join(base, entry, "eMMC")
+        if not os.path.isdir(emmc_dir):
+            continue
+        for name in sorted(os.listdir(emmc_dir)):
+            full = os.path.join(emmc_dir, name)
+            if not os.path.isfile(full) or os.path.islink(full):
+                continue
+            n = file_extents(full)
+            if n is None:
+                unavailable += 1
+                continue
+            checked += 1
+            rel = os.path.relpath(full, mount)
+            if n > EMUMMC_MAX_FRAGMENTS:
+                over.append((rel, n))
+                log(f"WARNING: {rel} has {n} fragments (> "
+                    f"{EMUMMC_MAX_FRAGMENTS}): file-based emuMMC will "
+                    "fatally abort the boot (black screen after the "
+                    "Atmosphere logo)")
+            elif n > EMUMMC_WARN_FRAGMENTS:
+                log(f"warning: {rel} has {n} fragments, approaching the "
+                    f"{EMUMMC_MAX_FRAGMENTS}-fragment emuMMC boot limit")
+    if over:
+        log("defragment the listed file(s) before booting the Switch: copy "
+            "each to a new name on the same card, verify the copy, then "
+            "replace the original. See docs/case-emummc-fragment-limit.md")
+    elif checked:
+        log(f"emuMMC check: {checked} eMMC part file(s) within the "
+            f"{EMUMMC_MAX_FRAGMENTS}-fragment limit")
+    elif unavailable:
+        log("emuMMC note: filefrag unavailable; fragment check skipped")
+    return over
 
 
 # ---------------------------------------------------------------- journal
@@ -624,6 +705,7 @@ class Refresher:
         print(f"\nrefreshed {n_done} file(s), {human(self.done_bytes)} in {dt:.0f}s")
         for state in sorted(summ):
             print(f"  {state}: {summ[state]}")
+        check_emummc_fragmentation(self.mount, log=self.log)
         if summ.get(ERROR):
             print("there were errors; staged copies (if any) are kept in "
                   f"{self.staged_dir}", file=sys.stderr)
@@ -654,7 +736,7 @@ def main(argv=None):
         prog="tfrefresh",
         description="Rewrite all files on a TF/SD card through a bounded local "
                     "buffer to cure cold-data slowdown. Crash-safe and resumable.")
-    p.add_argument("--version", action="version", version="tfrefresh 1.1")
+    p.add_argument("--version", action="version", version="tfrefresh 1.2")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
