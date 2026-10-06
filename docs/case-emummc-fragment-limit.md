@@ -19,10 +19,49 @@ extents. Defragmenting it back to 1 extent restored booting immediately.
   within a second (the console silently reboots to RCM; on modchip
   consoles this can look like a power-off or a boot loop).
 - sysMMC (CFW and stock) boots normally.
-- No Atmosphere crash/fatal reports are written — the abort happens
-  before logging is up.
 - Every file's SHA-256 matches the pre-refresh state; `fsck` is clean;
   hekate's "Fix Archive Bit" reports nothing to do.
+- No Atmosphere crash/fatal reports are written — see
+  [Why there is no log](#why-there-is-no-log) below.
+
+## Why there is no log
+
+The silence is structural, and it is why this failure stayed a community
+mystery for years:
+
+1. **The abort fires before any logging infrastructure exists.**
+   `_file_based_emmc_initialize()` runs inside `sdmmc_initialize()`, in the
+   earliest phase of the Horizon OS boot. Atmosphere's report writers —
+   the `fatal` sysmodule (`/atmosphere/fatal_reports`), crash reports, and
+   `erpt_reports` — all require the FS sysmodule to be up and the SD card
+   mounted through the normal (already-redirected) path. None of that
+   exists yet at the moment of failure; there is literally no file-writing
+   facility available.
+2. **The error record is stashed in IRAM, not on disk.** `fatal_abort()`
+   (emummc `source/utils/fatal.c`) fills an `atmosphere_fatal_error_ctx`
+   and copies it to physical address `0x4003E000` (magic `"AFE1"`), then
+   calls `smcRebootToRcm()`. The source even carries the telling comment
+   `// Basic error storage for Atmosphere / TODO: Maybe include a small
+   reboot2payload stub?`. The design intent is that a *warm* reboot back
+   into Atmosphere would find the context and show the fatal-error screen.
+3. **The warm-reboot handoff usually never completes.** Rebooting to RCM
+   hands control to whatever injects next: on an RCM-exploit console the
+   unit sits in RCM looking powered-off; on a modchip console the chip
+   typically re-injects hekate, so the user lands back in the hekate menu
+   (or loops) instead of Atmosphere's fatal screen. Either way the screen
+   is never seen — and any power-off wipes IRAM, erasing the last trace.
+
+If the fatal screen *is* ever captured for this failure (e.g. by
+chainloading straight back into Atmosphere without power-cycling), the
+fingerprint is: **Title ID `0100000000000000` (FS), Error Desc `0xE`
+(14)** — `Fatal_FatfsMemExhaustion` in the current emummc source (the
+enum value may shift across versions). Seeing that code on a file-based
+emuMMC boot is this bug.
+
+So the observable evidence reduces to: logo, black, no reports, and
+nothing in `/atmosphere/crash_reports`, `/atmosphere/fatal_reports`, or
+`erpt_reports` — exactly the "unsolvable" reports scattered across the
+forums.
 
 ## Root cause
 
