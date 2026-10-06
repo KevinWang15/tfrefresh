@@ -198,6 +198,15 @@ class TestVerifyRead(Base):
         with open(staged[0], "rb") as f:
             self.assertEqual(f.read(), data)
 
+    def test_no_verify_read_opts_out(self):
+        data = os.urandom(100000)
+        self.write_card_file("v.bin", data)
+        with mock.patch.object(tf, "hash_file",
+                               side_effect=AssertionError("must not be called")):
+            rc = self.run_cli("--no-verify-read")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.read_card_file("v.bin"), data)
+
 
 class TestCrashRecovery(Base):
     def _stage_and_crash(self):

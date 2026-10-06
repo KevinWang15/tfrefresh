@@ -22,18 +22,19 @@ Design goals:
 
 Usage:
     tfrefresh.py run    /Volumes/MYCARD [--buffer 80%|5G] [--state-dir DIR]
-                        [--verify-read] [--retry-errors] [--force] [--quiet]
+                        [--no-verify-read] [--retry-errors] [--force] [--quiet]
     tfrefresh.py status /Volumes/MYCARD
     tfrefresh.py scan   /Volumes/MYCARD
 
-With --verify-read, each written-back file is re-read from the card (page
-cache dropped, so the hash reflects what is actually on the device) and
-verified against the staged copy; a mismatch triggers a rewrite, up to 3
-attempts, after which the file is marked "error" and the verified buffer
-copy is kept. This catches silent write-path corruption (flaky reader or
-controller) at the cost of one extra read pass. It does NOT protect
-against filesystem metadata corruption if the device vanishes mid-write --
-run fsck after any such event.
+By default, each written-back file is re-read from the card (page cache
+dropped, so the hash reflects what is actually on the device) and verified
+against the staged copy; a mismatch triggers a rewrite, up to 3 attempts,
+after which the file is marked "error" and the verified buffer copy is
+kept. This catches silent write-path corruption (flaky reader or
+controller). --no-verify-read skips this (~33% faster) at the risk of not
+detecting such corruption. Neither mode protects against filesystem
+metadata corruption if the device vanishes mid-write -- run fsck after
+any such event.
 
 Files that hit an I/O error are marked "error" (their card originals are
 left untouched) and the run continues; after fixing the hardware, re-run
@@ -653,7 +654,7 @@ def main(argv=None):
         prog="tfrefresh",
         description="Rewrite all files on a TF/SD card through a bounded local "
                     "buffer to cure cold-data slowdown. Crash-safe and resumable.")
-    p.add_argument("--version", action="version", version="tfrefresh 1.0")
+    p.add_argument("--version", action="version", version="tfrefresh 1.1")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
@@ -673,12 +674,16 @@ def main(argv=None):
     sp.add_argument("--retry-errors", action="store_true",
                     help="reset files marked 'error' to pending and try them "
                          "again (only if the card original is intact)")
-    sp.add_argument("--verify-read", action="store_true",
+    sp.add_argument("--verify-read", dest="verify_read", action="store_true",
+                    default=True,
                     help="after writing each file back, re-read it from the "
                          "card (page cache dropped) and verify the hash; "
                          "rewrite up to 3 times on mismatch, keeping the "
-                         "buffer copy. Slower (~+50%%) but catches silent "
-                         "write-path corruption")
+                         "buffer copy (default; this is the safe mode)")
+    sp.add_argument("--no-verify-read", dest="verify_read",
+                    action="store_false",
+                    help="skip the read-back verification (~33%% faster); "
+                         "silent write-path corruption would go undetected")
 
     sp = sub.add_parser("status", help="show refresh state for a card")
     common(sp)

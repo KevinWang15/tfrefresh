@@ -49,29 +49,31 @@ tfrefresh does exactly that, file by file:
     copy file -> local buffer (SHA-256 verified, fsynced)
     delete file from card
     copy back to the same path (verified, fsynced, atomic rename)
-    re-read from the card and verify against the buffer copy   [--verify-read]
+    re-read from the card and verify against the buffer copy
 
 The effect lasts until the new charge drifts — typically months to years,
 after which you simply run it again.
 
 ## Usage
 
-    tfrefresh.py run    /Volumes/MYCARD --verify-read [--buffer 80%|5G]
-                        [--state-dir DIR]
+    tfrefresh.py run    /Volumes/MYCARD [--buffer 80%|5G] [--state-dir DIR]
+                        [--no-verify-read] [--retry-errors]
     tfrefresh.py status /Volumes/MYCARD
     tfrefresh.py scan   /Volumes/MYCARD
 
-**Use `--verify-read`.** It is the strictest form and the recommended one:
-after each file is written back, tfrefresh re-reads it from the card (with
-the OS page cache dropped, so the hash reflects what is actually on the
-device) and verifies it against the known-good buffer copy. A mismatch
-triggers a rewrite, up to 3 attempts; if all fail, the file is marked
-`error` and the verified buffer copy is kept — the tool never lets go of
-the only good copy of your data. This catches silent write-path corruption
-from a flaky reader or controller, which is otherwise undetectable. The
-cost is one extra read pass (~+50% runtime); on a job that runs for hours
-unattended, that is cheap insurance. Only omit it if you fully trust the
-card reader and are in a hurry.
+**Read-back verification is on by default** (this is a data tool; the
+strictest form is the default form). After each file is written back,
+tfrefresh re-reads it from the card — with the OS page cache dropped, so
+the hash reflects what is actually on the device — and verifies it against
+the known-good buffer copy. A mismatch triggers a rewrite, up to 3
+attempts; if all fail, the file is marked `error` and the verified buffer
+copy is kept: the tool never lets go of the only good copy of your data.
+This catches silent write-path corruption from a flaky reader or
+controller, which is otherwise undetectable.
+
+`--no-verify-read` opts out (~33% faster: two passes over the data instead
+of three). Only use it if you fully trust the card reader and accept that
+a silently botched write would go undetected.
 
 - `scan` — dry run: counts files and sizes, touches nothing.
 - `run` — refresh, or resume an interrupted refresh. Safe to Ctrl-C,
@@ -98,8 +100,8 @@ starts (wasteful, never unsafe).
 ## Safety properties
 
 - **Verified rewrite**: the buffer copy is SHA-256-checked against the
-  card read, the write-back against the buffer, and (with the recommended
-  `--verify-read`) the card's stored copy is re-read and checked before
+  card read, the write-back against the buffer, and (unless opted out with
+  `--no-verify-read`) the card's stored copy is re-read and checked before
   the buffer copy is released.
 - **Crash-safe at any point** (SIGKILL, power loss, card yanked): every
   state transition is journaled with fsync before the next mutation. A
@@ -113,9 +115,9 @@ starts (wasteful, never unsafe).
 
 ## Caveats
 
-- Without `--verify-read`, the card's copy is not re-read after
+- With `--no-verify-read`, the card's copy is not re-read after
   write-back, so a *silent* write-path fault (flaky reader or controller)
-  would go undetected. This is why `--verify-read` is recommended.
+  would go undetected. This is why verification is the default.
 - On journaling-less filesystems (exFAT, FAT32), a power cut or device
   removal mid-write can corrupt filesystem metadata even though file
   contents are protected. Keep the card powered and seated during the run,
