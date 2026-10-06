@@ -124,6 +124,17 @@ starts (wasteful, never unsafe).
   Devices that depend on these bits — notably Nintendo Switch boot chains
   — may need their attribute repair run afterwards (hekate: Tools ->
   Fix Archive Bit).
+- Rewriting a file reallocates its clusters, so on a nearly-full card a
+  previously contiguous file can come back fragmented. This matters for
+  consumers that map file fragments into fixed-size tables instead of
+  walking the filesystem: Atmosphere's file-based emuMMC builds a cluster
+  link map with room for 511 fragments per `emuMMC/*/eMMC/*` part file
+  and *fatally aborts the boot* (instant black screen / reboot to RCM)
+  when a part file exceeds that. If you refresh a card holding a
+  file-based emuMMC, check the part files afterwards
+  (`filefrag emuMMC/SD00/eMMC/*`) and defragment any file back to one
+  extent (copy it within the card, hash-verify, replace) before booting
+  the Switch.
 - On journaling-less filesystems (exFAT, FAT32), a power cut or device
   removal mid-write can corrupt filesystem metadata even though file
   contents are protected. Keep the card powered and seated during the run,
