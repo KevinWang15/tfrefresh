@@ -118,6 +118,12 @@ starts (wasteful, never unsafe).
 - With `--no-verify-read`, the card's copy is not re-read after
   write-back, so a *silent* write-path fault (flaky reader or controller)
   would go undetected. This is why verification is the default.
+- Rewritten files are recreated by the host OS, so FAT/exFAT DOS
+  attribute bits (archive/hidden/system) are not preserved (on FAT32 the
+  Linux vfat ioctls could restore them; exFAT exposes no userspace API).
+  Devices that depend on these bits — notably Nintendo Switch boot chains
+  — may need their attribute repair run afterwards (hekate: Tools ->
+  Fix Archive Bit).
 - On journaling-less filesystems (exFAT, FAT32), a power cut or device
   removal mid-write can corrupt filesystem metadata even though file
   contents are protected. Keep the card powered and seated during the run,
